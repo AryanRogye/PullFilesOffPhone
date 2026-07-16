@@ -1,5 +1,7 @@
 # PullFilesOffPhone
 
+> work in progress nothing working yet
+
 A small macOS command-line tool that uses `libimobiledevice`
 
 ## Dependencies
