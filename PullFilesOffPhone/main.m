@@ -10,6 +10,7 @@
 #import <libimobiledevice/lockdown.h>
 #import <libimobiledevice/afc.h>
 #import <libimobiledevice/installation_proxy.h>
+#import <libimobiledevice/house_arrest.h>
 #import <sys/socket.h>
 #include <netdb.h>
 
@@ -105,9 +106,16 @@ void print_plist(plist_t info) {
             break;
         }
             
-        case PLIST_ARRAY:
-            NSLog(@"ARRAY");
+        case PLIST_ARRAY: {
+            uint32_t size = plist_array_get_size(info);
+            NSLog(@"ARRAY (%u items)", size);
+            for (uint32_t i = 0; i < size; i++) {
+                plist_t item = plist_array_get_item(info, i);
+                NSLog(@"  [%u]:", i);
+                print_plist(item);
+            }
             break;
+        }
             
         case PLIST_DICT: {
             char *xml = NULL;
@@ -155,6 +163,32 @@ void print_plist(plist_t info) {
         case PLIST_NULL:
             NSLog(@"NULL");
             break;
+    }
+}
+
+void print_bundle_ids(plist_t apps) {
+    if (plist_get_node_type(apps) != PLIST_ARRAY) {
+        NSLog(@"Result is not an array");
+        return;
+    }
+    
+    uint32_t count = plist_array_get_size(apps);
+    NSLog(@"Found %d user applications:", count);
+    
+    for (uint32_t i = 0; i < count; i++) {
+        plist_t app_dict = plist_array_get_item(apps, i);
+        
+        // Get the CFBundleIdentifier key from the dictionary
+        plist_t bundle_id_node = plist_dict_get_item(app_dict, "CFBundleIdentifier");
+        
+        if (bundle_id_node && plist_get_node_type(bundle_id_node) == PLIST_STRING) {
+            char *bundle_id = NULL;
+            plist_get_string_val(bundle_id_node, &bundle_id);
+            
+            NSLog(@"%d. %s", i + 1, bundle_id);
+            
+            free(bundle_id); // Remember to free strings retrieved from plist
+        }
     }
 }
 
@@ -242,7 +276,7 @@ int main(int argc, const char * argv[]) {
         while (true) {
             NSLog(@"Pick a Choice");
             NSLog(@"1. Read Plist");
-            NSLog(@"2. Read Dictionary");
+            NSLog(@"2. Read Directory");
             NSLog(@"3. See Installed");
             NSLog(@"4. to exit.");
             if (scanf("%d", &user_choice) != 1) {
@@ -336,13 +370,37 @@ int main(int argc, const char * argv[]) {
                     break;
                 }
                 case SEE_INSTALLED: {
-                    NSLog(@"Auto Creates a lockdownd_client_t and lockdownd_service_descriptor_t");
                     // clear memory
                     afc_client_free(afc_client);
                     afc_client = NULL;
                     
                     lockdownd_service_descriptor_free(service);
                     service = NULL;
+                    
+                    instproxy_client_t iproxy = NULL;
+                    if (instproxy_client_start_service(device, &iproxy, "MyAwesomeApp") != INSTPROXY_E_SUCCESS) {
+                        NSLog(@"Could Not Start Installation Proxy");
+                        exit_status = EXIT_FAILURE;
+                        goto cleanup;
+                    }
+                    NSLog(@"Started Installation Proxy");
+                    
+                    // Set options to only return "User" apps (App Store / Sideloaded)
+                    plist_t client_opts = instproxy_client_options_new();
+                    instproxy_client_options_add(client_opts, "ApplicationType", "User", NULL);
+                    
+                    plist_t apps = NULL;
+                    if (instproxy_browse(iproxy, client_opts, &apps) != INSTPROXY_E_SUCCESS) {
+                        NSLog(@"Could Not Retrieve Apps");
+                        exit_status = EXIT_FAILURE;
+                        goto cleanup;
+                    }
+                    NSLog(@"Successfully fetched app list!");
+                    print_bundle_ids(apps);
+                    plist_free(apps);
+                    instproxy_client_options_free(client_opts);
+                    instproxy_client_free(iproxy);
+                    break;
                 }
             }
             
