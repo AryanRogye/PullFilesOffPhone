@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Xcode build output
+DerivedData/
+build/
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+
+# Xcode per-user settings
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager / Xcode package metadata
+.build/
+.swiftpm/
+
+# Locally cloned third-party source
+clones/
+
+# Local environment and temporary files
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+*~
