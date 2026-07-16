@@ -16,6 +16,9 @@
 bool doesUdidExist(struct idevice_info **devices, int count, char input[256]);
 void printDeviceInfos(struct idevice_info **devices, int count);
 void print_plist(plist_t node);
+bool init_lockdown_client(idevice_t device, lockdownd_client_t *client, char* label);
+bool start_lockdown_service(idevice_t device, lockdownd_client_t client, lockdownd_service_descriptor_t *service);
+bool create_afc_client(idevice_t device, lockdownd_service_descriptor_t service, lockdownd_client_t client, afc_client_t *afc_client);
 
 bool doesUdidExist(struct idevice_info **devices, int count, char input[256]) {
     // we verify the udid exists
@@ -155,6 +158,38 @@ void print_plist(plist_t info) {
     }
 }
 
+enum CLIChoise {
+    READ_PLIST,
+    READ_DIRECTORY,
+    SEE_INSTALLED,
+};
+
+bool init_lockdown_client(idevice_t device, lockdownd_client_t *client, char* label) {
+    // now we have a udid we can create the lockdown client
+    if (lockdownd_client_new_with_handshake(device, client, label) != LOCKDOWN_E_SUCCESS) {
+        NSLog(@"Could Not Create lockdownd_client_t");
+        return false;
+    }
+    NSLog(@"Created Lockdown Client");
+    return true;
+}
+
+bool start_lockdown_service(idevice_t device, lockdownd_client_t client, lockdownd_service_descriptor_t *service) {
+    if (lockdownd_start_service(client, "com.apple.afc", service) != LOCKDOWN_E_SUCCESS) {
+        NSLog(@"Could Not Start Service To com.apple.afc");
+        return false;
+    }
+    return true;
+}
+
+bool create_afc_client(idevice_t device, lockdownd_service_descriptor_t service, lockdownd_client_t client, afc_client_t *afc_client) {
+    if (afc_client_new(device, service, afc_client) != AFC_E_SUCCESS) {
+        NSLog(@"Could Not Create Client For com.apple.afc");
+        return false;
+    }
+    return true;
+}
+
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
         
@@ -194,71 +229,144 @@ int main(int argc, const char * argv[]) {
         }
         NSLog(@"Created Device");
         
-        // create a lockdownd_client_t
+        
+        int user_choice = -1;
+        
+        
         lockdownd_client_t client = NULL;
-        char* label = "MyAwesomeApp";
-        
-        // now we have a udid we can create the lockdown client
-        if (lockdownd_client_new_with_handshake(device, &client, label) != LOCKDOWN_E_SUCCESS) {
-            NSLog(@"Could Not Create lockdownd_client_t");
-            idevice_free(device);
-            return EXIT_FAILURE;
-        }
-        NSLog(@"Created Lockdown Client");
-        
         lockdownd_service_descriptor_t service = NULL;
-        if (lockdownd_start_service(client, "com.apple.afc", &service) != LOCKDOWN_E_SUCCESS) {
-            NSLog(@"Could Not Start Service To com.apple.afc");
-            idevice_free(device);
-            lockdownd_client_free(client);
-            return EXIT_FAILURE;
-        }
-        NSLog(@"Started Service To com.apple.afc");
-        
         afc_client_t afc_client = NULL;
-        if (afc_client_new(device, service, &afc_client) != AFC_E_SUCCESS) {
-            NSLog(@"Could Not Create Client For com.apple.afc");
-            lockdownd_service_descriptor_free(service);
-            lockdownd_client_free(client);
-            idevice_free(device);
-            return EXIT_FAILURE;
+        char* label = "MyAwesomeApp";
+        int exit_status = EXIT_SUCCESS;
+
+        while (true) {
+            NSLog(@"Pick a Choice");
+            NSLog(@"1. Read Plist");
+            NSLog(@"2. Read Dictionary");
+            NSLog(@"3. See Installed");
+            NSLog(@"4. to exit.");
+            if (scanf("%d", &user_choice) != 1) {
+                NSLog(@"That's not an integer");
+                
+                int character;
+                while ((character = getchar()) != '\n' && character != EOF) {
+                }
+                
+                continue;
+            }
+            
+            if (user_choice == 4) {
+                break;
+            }
+            if (user_choice < 1 || user_choice > 4) {
+                NSLog(@"Invalid choice");
+                continue;
+            }
+            
+            enum CLIChoise choice = user_choice - 1;
+            switch (choice) {
+                case READ_PLIST: {
+                    // verify client exists
+                    if (client == NULL) {
+                        if (!init_lockdown_client(device, &client, label)) {
+                            exit_status = EXIT_FAILURE;
+                            goto cleanup;
+                        }
+                    }
+                    // verify service exists
+                    if (service == NULL) {
+                        if (!start_lockdown_service(device, client, &service)) {
+                            exit_status = EXIT_FAILURE;
+                            goto cleanup;
+                        }
+                    }
+                    // verify afc_client exists
+                    if (afc_client == NULL) {
+                        if (!create_afc_client(device, service, client, &afc_client)) {
+                            exit_status = EXIT_FAILURE;
+                            goto cleanup;
+                        }
+                    }
+                    
+                    plist_t info = NULL;
+                    if (afc_get_device_info_plist(afc_client, &info) != AFC_E_SUCCESS) {
+                        NSLog(@"Could Not Get Device Info.plist");
+                        exit_status = EXIT_FAILURE;
+                        goto cleanup;
+                    }
+                    print_plist(info);
+                    plist_free(info);
+                    break;
+                }
+                case READ_DIRECTORY: {
+                    // verify client exists
+                    if (client == NULL) {
+                        if (!init_lockdown_client(device, &client, label)) {
+                            exit_status = EXIT_FAILURE;
+                            goto cleanup;
+                        }
+                    }
+                    // verify service exists
+                    if (service == NULL) {
+                        if (!start_lockdown_service(device, client, &service)) {
+                            exit_status = EXIT_FAILURE;
+                            goto cleanup;
+                        }
+                    }
+                    // verify afc_client exists
+                    if (afc_client == NULL) {
+                        if (!create_afc_client(device, service, client, &afc_client)) {
+                            exit_status = EXIT_FAILURE;
+                            goto cleanup;
+                        }
+                    }
+                    char **directory_info = NULL;
+                    
+                    if (afc_read_directory(afc_client, "/", &directory_info) != AFC_E_SUCCESS) {
+                        NSLog(@"Could Not Read Directory");
+                        exit_status = EXIT_FAILURE;
+                        goto cleanup;
+                    }
+                    int i = 0;
+                    while (directory_info[i] != NULL) {
+                        NSLog(@"%s", directory_info[i]);
+                        i++;
+                    }
+                    afc_dictionary_free(directory_info);
+                    break;
+                }
+                case SEE_INSTALLED: {
+                    NSLog(@"Auto Creates a lockdownd_client_t and lockdownd_service_descriptor_t");
+                    // clear memory
+                    afc_client_free(afc_client);
+                    afc_client = NULL;
+                    
+                    lockdownd_service_descriptor_free(service);
+                    service = NULL;
+                }
+            }
+            
+            continue;
         }
-        NSLog(@"Created Client For com.apple.afc");
         
-        plist_t info = NULL;
-        if (afc_get_device_info_plist(afc_client, &info) != AFC_E_SUCCESS) {
-            NSLog(@"Could Not Get Device Info.plist");
-            lockdownd_service_descriptor_free(service);
+    cleanup:
+        if (afc_client != NULL) {
             afc_client_free(afc_client);
-            lockdownd_client_free(client);
-            idevice_free(device);
-            return EXIT_FAILURE;
         }
-        print_plist(info);
         
-        char **directory_info = NULL;
-        
-        if (afc_read_directory(afc_client, "/Downloads", &directory_info) != AFC_E_SUCCESS) {
-            NSLog(@"Could Not Read Directory");
+        if (service != NULL) {
             lockdownd_service_descriptor_free(service);
-            afc_client_free(afc_client);
-            lockdownd_client_free(client);
-            idevice_free(device);
-            plist_free(info);
-            return EXIT_FAILURE;
-        }
-        int i = 0;
-        while (directory_info[i] != NULL) {
-            NSLog(@"%s", directory_info[i]);
-            i++;
         }
         
-        free(directory_info);
-        lockdownd_service_descriptor_free(service);
-        afc_client_free(afc_client);
-        lockdownd_client_free(client);
-        idevice_free(device);
-        plist_free(info);
+        if (client != NULL) {
+            lockdownd_client_free(client);
+        }
+        
+        if (device != NULL) {
+            idevice_free(device);
+        }
+        return exit_status;
+        
     }
     return EXIT_SUCCESS;
 }
